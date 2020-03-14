@@ -1,11 +1,17 @@
 // 封装了对缓存条目的操作
 
+/*
+ * Simple caching library with expiration capabilities
+ *     Copyright (c) 2013-2017, Christian Muehlhaeuser <muesli@gmail.com>
+ *
+ *   For license see LICENSE.txt
+ */
+
+
 package cache2go
 
 import (
-	// 同步相关
 	"sync"
-	// 时间相关
 	"time"
 )
 
@@ -19,7 +25,7 @@ type CacheItem struct {
 	key interface{}
 	// data，可以是任意类型(空接口)
 	data interface{}
-	// 不被访问后的保活时间
+	// 没有访问后的保活时间
 	// 等于0说明永久保活
 	lifeSpan time.Duration
 
@@ -57,7 +63,7 @@ func (item *CacheItem) KeepAlive() {
 	item.accessCount++
 }
 
-// 返回不被访问后的保活时间
+// 返回没有访问后的保活时间
 func (item *CacheItem) LifeSpan() time.Duration {
 	// 不需要加锁，因为创建后就没有情况会修改此值
 	return item.lifeSpan
@@ -77,7 +83,7 @@ func (item *CacheItem) CreatedOn() time.Time {
 }
 
 // 返回条目被访问的次数
-func (item *CacheItem) accessCount() int64 {
+func (item *CacheItem) AccessCount() int64 {
 	item.RLock()
 	defer item.RUnlock()
 	return item.accessCount
@@ -95,8 +101,8 @@ func (item *CacheItem) Data() interface{} {
 	return item.data
 }
 
-// 设置被移除时候的回调函数
-func (item *CacheItem) SetAboutToExpireCallback() {
+// 设置条目被移除时候的回调函数，会删除以前的回调函数
+func (item *CacheItem) SetAboutToExpireCallback(f func(interface{})) {
 	if len(item.aboutToExpire) > 0 {
 		item.RemoveAboutToExpireCallback()
 	}

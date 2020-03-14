@@ -1,15 +1,18 @@
 // 封装了对缓存表项的操作
 
+/*
+ * Simple caching library with expiration capabilities
+ *     Copyright (c) 2013-2017, Christian Muehlhaeuser <muesli@gmail.com>
+ *
+ *   For license see LICENSE.txt
+ */
+
 package cache2go
 
 import (
-	// 日志相关
 	"log"
-	// 排序相关
 	"sort"
-	// 同步相关
 	"sync"
-	// 时间相关
 	"time"
 )
 
@@ -64,7 +67,7 @@ func (table *CacheTable) SetDataLoader(f func(interface{}, ...interface{}) *Cach
 	table.loadData = f
 }
 
-// 设置添加缓存条目时触发的回调函数
+// 设置添加缓存条目时触发的回调函数，会删除以前的回调函数
 func (table *CacheTable) SetAddedItemCallback(f func(*CacheItem)) {
 	if len(table.addedItem) > 0 {
 		table.RemoveAddedItemCallbacks()
@@ -88,8 +91,8 @@ func (table *CacheTable) RemoveAddedItemCallbacks() {
 	table.addedItem = nil
 }
 
-// 设置删除缓存条目时触发的回调函数
-func (table *CacheTable) SetAboutDeleteItemCallback(f func(*CacheItem)) {
+// 设置删除缓存条目时触发的回调函数，会删除以前的回调函数
+func (table *CacheTable) SetAboutToDeleteItemCallback(f func(*CacheItem)) {
 	if len(table.aboutToDeleteItem) > 0 {
 		table.RemoveAboutToDeleteItemCallback()
 	}
@@ -121,7 +124,7 @@ func (table *CacheTable) SetLogger(logger *log.Logger) {
 }
 
 // 过期检查，能自动调节间隔
-// 自动调节到条目最早过期的时间，方便到时删除
+// 自动调节到条目中最早过期的时间，方便到时删除该条目
 func (table *CacheTable) expirationCheck() {
 	table.Lock()
 
@@ -160,8 +163,12 @@ func (table *CacheTable) expirationCheck() {
 
 		// 已经过期了，删除
 		if now.Sub(accessedOn) >= lifeSpan {
+			table.Unlock()
+			
 			// 内部删除接口
 			table.deleteInternal(key)
+
+			table.Lock()
 		} else {
 			// 更新smallestDuration，获取最近一个将要过期的时间间隔
 			if smallestDuration == 0 || lifeSpan - now.Sub(accessedOn) < smallestDuration {
@@ -184,8 +191,6 @@ func (table *CacheTable) expirationCheck() {
 
 // 内部添加函数，代码重用
 func (table *CacheTable) addInternal(item *CacheItem) {
-	table.Lock()
-
 	table.log("Adding item with key", item.key, 
 		"and lifeSpan of", item.lifeSpan, 
 		"to table", table.name)
@@ -218,21 +223,26 @@ func (table *CacheTable) addInternal(item *CacheItem) {
 }
 
 // 创建缓存条目并且加入到缓存表
+// 存在相同条目被前后增加的情况，不会并发增加
 func (table *CacheTable) Add(key interface{}, lifeSpan time.Duration, data interface{}) *CacheItem {
 	// 创建条目
 	item := NewCacheItem(key, lifeSpan, data)
+
+	table.Lock()
 	// 内部添加接口
 	table.addInternal(item)
 
 	return item
 }
 
-// 内部删除函数，代码重用，调用这个方法之前需要加锁
+// 内部删除函数，代码重用
+// 存在一个 删除表中条目或条目被删除的回调函数 被多次调用的
+// 情况，但是不会多次删除同一条目
 func (table *CacheTable) deleteInternal(key interface{}) (*CacheItem, error) {
 	table.Lock()
 
 	r, ok := table.items[key]
-	if !ok {
+	if !ok { 
 		return nil, ErrKeyNotFound
 	}
 
@@ -243,7 +253,7 @@ func (table *CacheTable) deleteInternal(key interface{}) (*CacheItem, error) {
 	// 触发删条目的回调函数
 	if aboutToDeleteItem != nil {
 		for _, callback := range aboutToDeleteItem {
-			callback(key)
+			callback(r)
 		}
 	}
 
@@ -291,9 +301,11 @@ func (table *CacheTable) NotFoundAdd(key interface{}, lifeSpan time.Duration, da
 		return false
 	}
 
-	table.Unlock()
+	// table.Unlock()，这里不应该解锁，
+	// 增加完成后才可以解锁
 
-	table.Add(key, lifeSpan, data)
+	item := NewCacheItem(key, lifeSpan, data)
+	table.addInternal(item)
 
 	return true
 }
@@ -317,6 +329,9 @@ func (table *CacheTable) Value(key interface{}, args ...interface{}) (*CacheItem
 		// 打散slice
 		item := loadData(key, args...)
 		if item != nil {
+			// 如果该key不存在，并发会造成相同的key多次被加入表中，
+			// 从而造成key对应的内容被覆盖，应该调用
+			// table.NotFoundAdd(key, item.lifeSpan, item.data)
 			table.Add(key, item.lifeSpan, item.data)
 			return item, nil
 		}
@@ -352,7 +367,7 @@ func (table *CacheTable) log(v ...interface{}) {
 
 // 缓存条目<->访问次数对
 type CacheItemPair struct {
-	key interface{}
+	Key interface{}
 	AccessCount int64
 }
 
@@ -371,7 +386,7 @@ func (p CacheItemPairList) Less(i, j int) bool {
 }
 
 // 获取访问最多的几个CacheItem，最多返回count个条目
-func (table *CacheTable) MostAceessed(count int64) []*CacheItem {
+func (table *CacheTable) MostAccessed(count int64) []*CacheItem {
 	table.RLock()
 	defer table.RLock()
 
