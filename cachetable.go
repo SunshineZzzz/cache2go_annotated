@@ -61,6 +61,7 @@ func (table *CacheTable) Foreach(trans func(key interface{}, item *CacheItem)) {
 }
 
 // 设置加载一个不存在的key时触发的回调函数
+// 该函数返回CacheItem就会加入表中
 func (table *CacheTable) SetDataLoader(f func(interface{}, ...interface{}) *CacheItem) {
 	table.Lock()
 	defer table.Unlock()
